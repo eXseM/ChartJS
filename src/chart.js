@@ -1,5 +1,15 @@
 import { tooltip } from "./tooltip";
-import { isOver, toDate, circle, line, boundaries, css, toCoords } from "./utils";
+import {
+  isOver,
+  toDate,
+  circle,
+  line,
+  boundaries,
+  css,
+  toCoords,
+  computeYRatio,
+  computeXRatio,
+} from "./utils";
 import { sliderChart } from "./slider";
 
 const WIDTH = 600;
@@ -10,6 +20,7 @@ const DPI_HEIGHT = HEIGHT * 2;
 const VIEW_HEIGHT = DPI_HEIGHT - PADDING * 2;
 const VIEW_WIDTH = DPI_WIDTH;
 const ROWS_COUNT = 5;
+const SPEED = 300;
 
 export function chart(root, data) {
   const canvas = root.querySelector("[data-el='main']");
@@ -22,6 +33,7 @@ export function chart(root, data) {
 
   const ctx = canvas.getContext("2d");
   let raf;
+  let prevMax;
 
   canvas.width = DPI_WIDTH;
   canvas.height = DPI_HEIGHT;
@@ -40,6 +52,10 @@ export function chart(root, data) {
       },
     }
   );
+
+  slider.subscribe((pos) => {
+    proxy.pos = pos;
+  });
 
   canvas.addEventListener("mousemove", mousemove);
   canvas.addEventListener("mouseleave", mouseleave);
@@ -63,31 +79,64 @@ export function chart(root, data) {
     ctx.clearRect(0, 0, DPI_WIDTH, DPI_HEIGHT);
   }
 
+  function getMax(yMax) {
+    const step = (yMax - prevMax) / SPEED;
+
+    if (proxy.max < yMax) {
+      proxy.max += step;
+    } else if (proxy.max > yMax) {
+      proxy.max = yMax;
+      prevMax = yMax;
+    }
+
+    return proxy.max;
+  }
+
   function paint() {
     clear();
-    const [yMin, yMax] = boundaries(data);
-    const yRatio = VIEW_HEIGHT / (yMax - yMin);
-    const xRatio = VIEW_WIDTH / (data.columns[0].length - 2);
+    const length = data.columns[0].length;
+    const leftIndex = Math.round((length * proxy.pos[0]) / 100);
+    const rightIndex = Math.round((length * proxy.pos[1]) / 100);
 
-    const yData = data.columns.filter((col) => data.types[col[0]] === "line");
-    const xData = data.columns.filter(
+    const columns = data.columns.map((col) => {
+      const res = col.slice(leftIndex, rightIndex);
+      if (typeof res[0] !== "string") {
+        res.unshift(col[0]);
+      }
+      return res;
+    });
+
+    const [yMin, yMax] = boundaries({ columns, types: data.types });
+
+    if (!prevMax) {
+      prevMax = yMax;
+      proxy.max = yMax;
+    }
+
+    const yRatio = computeYRatio(VIEW_HEIGHT, yMax, yMin);
+    const xRatio = computeXRatio(VIEW_WIDTH, columns[0].length);
+
+    const yData = columns.filter((col) => data.types[col[0]] === "line");
+    const xData = columns.filter(
       (col) => data.types[col[0]] !== "line"
     )[0];
 
     yAxis(yMin, yMax);
     xAxis(xData, xRatio, yData);
 
-    yData.map(toCoords(xRatio, yRatio, DPI_HEIGHT, PADDING)).forEach((coords, idx) => {
-      const color = data.colors[yData[idx][0]];
-      line(ctx, coords, { color });
+    yData
+      .map(toCoords(xRatio, yRatio, DPI_HEIGHT, PADDING, yMin))
+      .forEach((coords, idx) => {
+        const color = data.colors[yData[idx][0]];
+        line(ctx, coords, { color });
 
-      for (const [x, y] of coords) {
-        if (isOver(proxy.mouse, x, coords.length, DPI_WIDTH)) {
-          circle(ctx, [x, y], color);
-          break;
+        for (const [x, y] of coords) {
+          if (isOver(proxy.mouse, x, coords.length, DPI_WIDTH)) {
+            circle(ctx, [x, y], color);
+            break;
+          }
         }
-      }
-    });
+      });
   }
 
   function xAxis(xData, xRatio, yData) {
